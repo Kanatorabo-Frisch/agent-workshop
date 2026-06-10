@@ -75,11 +75,27 @@ async function buildAgent() {
   //    SKILLS_DIR are all imported above and waiting for you. The route must stay
   //    the Node runtime (just-bash uses node:fs) — see app/api/chat/route.ts.
   // ───────────────────────────────────────────────────────────────────────────
+
+  const {
+    skill,
+    files: skillFiles,
+    instructions,
+  } = await createSkillTool({ skillsDirectory: SKILLS_DIR });
+
+  const files = {
+    ...skillFiles,
+    "incidents.md": generateIncidentArchive(INCIDENTS_PER_RUNBOOK),
+  };
+
+  const { tools } = await createBashTool({
+    files,
+    extraInstructions: instructions,
+  });
+
   return new ToolLoopAgent({
     model: openai(MODEL),
     instructions: SYSTEM_PROMPT,
-    // TODO: replace {} with { skill, bash: tools.bash } once you build the toolkit above.
-    tools: {},
+    tools: { skill, bash: tools.bash },
     stopWhen: stepCountIs(16),
     providerOptions: {
       openai: {
