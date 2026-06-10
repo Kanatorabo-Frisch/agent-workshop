@@ -19,7 +19,7 @@ export type Expected = {
 // Pull the contents of the trailing `Refs: [ ... ]` line, or null if absent.
 // (Handy for R1 and the "right runbook" scorer.)
 function refsLine(text: string): string | null {
-  const m = text.match(/^Refs:\s*\[(.*)\]\s*$/m);
+  const m = text.match(/(?:^|\r?\n)Refs:[ \t]*\[(.*)\][ \t]*$/);
   return m ? m[1] : null;
 }
 
@@ -44,9 +44,7 @@ function refsLine(text: string): string | null {
 export const refsPresent = createScorer<string, string, Expected>({
   name: "R1 · Refs line",
   description: "Reply ends with a `Refs: [RB-…]` line",
-  // TODO(R1): 1 if the reply has a trailing `Refs: [ ... ]` line, else 0.
-  //           (Hint: refsLine(output) !== null.)
-  scorer: () => 0,
+  scorer: ({ output }) => (refsLine(output) !== null ? 1 : 0),
 });
 
 export const citedExpectedRunbook = createScorer<string, string, Expected>({
@@ -54,7 +52,14 @@ export const citedExpectedRunbook = createScorer<string, string, Expected>({
   description: "The Refs line cites the runbook this issue should use",
   // TODO: 1 if the Refs line includes expected.runbook (case-insensitive), else 0.
   //       This is how you check progressive disclosure picked the RIGHT runbook.
-  scorer: () => 0,
+  scorer: ({ output, expected }) => {
+    const refs = refsLine(output);
+    return refs && expected
+      ? refs.toLowerCase().includes(expected.runbook.toLowerCase())
+        ? 1
+        : 0
+      : 0;
+  },
 });
 
 export const plainProse = createScorer<string, string, Expected>({
@@ -62,7 +67,10 @@ export const plainProse = createScorer<string, string, Expected>({
   description: "No markdown headers, tables, or bullet lists",
   // TODO(R2): 0 if the output has markdown headers (^#), bullet lists (^- / ^*),
   //           or tables (| … |); else 1.
-  scorer: () => 0,
+  scorer: ({ output }) => {
+    const hasMarkdown = /(^#|^- |\^\*|\|.*\|)/m.test(output);
+    return hasMarkdown ? 0 : 1;
+  },
 });
 
 export const slaStated = createScorer<string, string, Expected>({
@@ -71,23 +79,35 @@ export const slaStated = createScorer<string, string, Expected>({
   // TODO(R3): 1 if the output states an SLA in minutes
   //           (e.g. /\b\d+\s*(?:minutes?|min)\b/i), else 0.
   //           FORMAT only — whether the NUMBER is right is judged below.
-  scorer: () => 0,
+  scorer: ({ output }) => {
+    const slaRegex = /\b\d+\s*(?:minutes?|min)\b/i;
+    return slaRegex.test(output) ? 1 : 0;
+  },
 });
 
 export const signedOff = createScorer<string, string, Expected>({
   name: "R5 · sign-off",
   description: "Signs off with “— Triage Copilot”",
   // TODO(R5): 1 if the output includes "— Triage Copilot", else 0.
-  scorer: () => 0,
+  scorer: ({ output }) => {
+    return output.includes("— Triage Copilot") ? 1 : 0;
+  },
 });
 
 export const refundGuarded = createScorer<string, string, Expected>({
   name: "R4 · refund guarded",
-  description: "Refunds over $50 routed to finance approval (not promised outright)",
+  description:
+    "Refunds over $50 routed to finance approval (not promised outright)",
   // TODO(R4): 1 only if the reply routes the refund to finance approval (e.g.
   //           mentions "finance" AND "approval"/"approve") and does NOT promise
   //           the refund outright; else 0.
-  scorer: () => 0,
+  scorer: ({ output }) => {
+    const financeApprovalRegex = /\bfinance\b.*\b(approval|approve)\b/i;
+    const refundPromiseRegex = /\brefund\b.*\b(promised|guaranteed)\b/i;
+    return financeApprovalRegex.test(output) && !refundPromiseRegex.test(output)
+      ? 1
+      : 0;
+  },
 });
 
 // ── LLM-as-judge ─────────────────────────────────────────────────────────────
@@ -98,7 +118,8 @@ const JUDGE_MODEL = process.env.OPENAI_JUDGE_MODEL ?? "gpt-5-mini";
 
 export const slaValueCorrect = createScorer<string, string, Expected>({
   name: "SLA value correct (judge)",
-  description: "LLM judge: is the stated first-response SLA the correct number of minutes?",
+  description:
+    "LLM judge: is the stated first-response SLA the correct number of minutes?",
   // 🧪 TODO — implement the LLM-as-judge:
   //   1. If !expected → return { score: 0, metadata: { reason: "no expected value" } }.
   //   2. const { object } = await generateObject({
@@ -115,8 +136,30 @@ export const slaValueCorrect = createScorer<string, string, Expected>({
   //      });
   //   3. return { score: object.correct ? 1 : 0, metadata: object };
   //   (openai, generateObject, and z are already imported above.)
-  scorer: async () => ({
-    score: 0,
-    metadata: { reason: "TODO: implement the SLA-value judge" },
-  }),
+  scorer: async ({ expected, output, input }) => {
+    if (!expected) {
+      return {
+        score: 0,
+        metadata: { reason: "no expected value" },
+      };
+    }
+    const { object } = await generateObject({
+      model: openai(JUDGE_MODEL),
+      schema: z.object({
+        statedMinutes: z.number().nullable(), // the SLA the reply stated, or null
+        correct: z.boolean(),
+        reason: z.string(),
+      }),
+      prompt: [
+        "--INPUT--",
+        input,
+        "--OUTPUT--",
+        output,
+        "--EXPECTED SLA (minutes)--",
+        expected.slaMinutes.toString(),
+        "--JUDGE: did the reply state the correct SLA in minutes? If it stated an SLA, extract the number of minutes it stated (e.g. '1 hour' = 60, '2 business hours' = 120). Set correct=true ONLY if the stated SLA equals the expected SLA in minutes. Explain your reasoning in the reason field.",
+      ].join("\n"),
+    });
+    return { score: object.correct ? 1 : 0, metadata: object };
+  },
 });
