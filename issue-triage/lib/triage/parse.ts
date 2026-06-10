@@ -16,7 +16,7 @@ export type ParseResult =
 
 export function parseTriageText(text: string): ParseResult {
   // 🚦 ───────────────────────────────────────────────────────────────────────
-  // WORKSHOP TODO — validate the model's output at the UI boundary
+  // WORKSHOP DONE TODO — validate the model's output at the UI boundary
   //
   // The agent streams its decision as JSON *text*. The instant before that text
   // becomes a rendered card, PROVE it's safe:
@@ -31,10 +31,32 @@ export function parseTriageText(text: string): ParseResult {
   //    ONLY on { ok: true } and shows an honest error on { ok: false } — it never
   //    has to defend against a malformed shape. Return data; don't throw.
   // ───────────────────────────────────────────────────────────────────────────
+
+  const parsed = extractJson(text);
+  console.error("Parsed JSON:", parsed);
+
+  if (!parsed) {
+    return {
+      ok: false,
+      error: "Model did not return valid JSON.",
+      raw: text,
+    };
+  }
+
+  const validation = TriageResultSchema.safeParse(parsed);
+
+  if (validation.success) {
+    return {
+      ok: true,
+      data: validation.data,
+    };
+  }
+
   return {
     ok: false,
-    error: "TODO: implement parseTriageText (see the brief above).",
-    raw: text,
+    error: "Model output didn't match the contract.",
+    raw: parsed,
+    issues: validation.error.issues,
   };
 }
 

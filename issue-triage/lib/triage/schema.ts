@@ -37,7 +37,35 @@ import { z } from "zod";
 //    contract in sync with the English you wrote in prompt.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 export const TriageResultSchema = z.object({
-  // TODO: replace this empty object with the fields described above.
+  category: z.enum(["bug", "feature", "support", "unknown"]),
+  severity: z.enum(["low", "medium", "high", "critical"]),
+  summary: z.string().min(1).max(240),
+  affectedArea: z.enum([
+    "checkout",
+    "billing",
+    "auth",
+    "dashboard",
+    "settings",
+    "unknown",
+  ]),
+  ownerTeam: z.enum([
+    "payments",
+    "platform",
+    "growth",
+    "support",
+    "unknown",
+  ]),
+  suggestedAction: z.string().min(1).max(300),
+  needsHumanReview: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  evidence: z
+    .array(
+      z.object({
+        source: z.enum(["docs", "incidents", "ownership", "user_report"]),
+        note: z.string().max(200),
+      }),
+    )
+    .max(3),
 });
 
 export type TriageResult = z.infer<typeof TriageResultSchema>;
