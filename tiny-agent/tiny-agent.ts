@@ -4,6 +4,11 @@ type OutputTextContent = {
   [key: string]: unknown;
 };
 
+declare const process: {
+  env: Record<string, string | undefined>;
+  argv: string[];
+};
+
 type MessageItem = {
   type: "message";
   content?: unknown[];
@@ -110,9 +115,45 @@ async function runAgent(question: string): Promise<string> {
   //    whether/how to run them and feeds results back. That control is the job —
   //    it's why reliability is an engineering problem, not a prompting one.
   // ───────────────────────────────────────────────────────────────────────────
-  throw new Error(
-    `TODO(tiny-agent): implement the agent loop in runAgent() for: "${question}"`,
-  );
+  const maxSteps = 5;
+  let nextInput: unknown[] = [{ role: "user", content: question }];
+  let previousResponseId: string | undefined;
+  for (let step = 1; step <= maxSteps; step++) {
+    console.log(`\n=== STEP ${step} ===`);
+    const response = await callModel(nextInput, previousResponseId);
+
+    const toolCalls = response.output.filter(isFunctionCallItem);
+
+    if (toolCalls.length === 0) {
+      console.log("No tool calls. Final response:");
+      console.log(response);
+      return extractOutputText(response);
+    }
+
+    console.log(`Tool calls: ${toolCalls.map((c) => c.name).join(", ")}`);
+
+    const toolOutputs: {
+      type: "function_call_output";
+      call_id: string;
+      output: string;
+    }[] = [];
+    for (const call of toolCalls) {
+      console.log(
+        `Running tool ${call.name} with arguments: ${call.arguments}`,
+      );
+      const args = safeJsonParse(call.arguments);
+      const output = await runTool(call.name, args);
+      console.log(`Tool output: ${output}`);
+      toolOutputs.push({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output,
+      });
+    }
+    nextInput = toolOutputs;
+    previousResponseId = response.id;
+  }
+  throw new Error(`Agent exceeded max steps (${maxSteps}) without finishing.`);
 }
 
 async function callModel(
@@ -200,9 +241,11 @@ async function runTool(name: string, args: unknown): Promise<string> {
   //    returns errors as DATA, not exceptions — so a bad argument degrades into a
   //    tool result the model can recover from, instead of crashing the loop.
   // ───────────────────────────────────────────────────────────────────────────
-  throw new Error(
-    `TODO(tiny-agent): implement runTool dispatch (model requested "${name}").`,
-  );
+  if (name === "get_workshop_stage") {
+    return getWorkshopStage(args);
+  }
+
+  return JSON.stringify({ error: `Unknown tool: ${name}` });
 }
 
 function getWorkshopStage(args: unknown): string {
